@@ -13,37 +13,44 @@ st.markdown("Automated Data Pipeline | **MBA IA, Ciência de Dados e Big Data pa
 # --- 2. FUNÇÃO DE COLETA COM TRATAMENTO DE ERROS ---
 @st.cache_data(ttl=3600)
 def carregar_dados():
-    # Coleta SGS - Banco Central
+    # 1. Coleta SGS - Banco Central
     codigos = {'IPCA': 433, 'SELIC': 432, 'Dólar': 10813, 'IGPM': 189, 'PIB': 4380}
     try:
         df_sgs = sgs.get(codigos, start='2020-01-01')
-        # Padroniza o índice para o primeiro dia do mês
         df_sgs.index = df_sgs.index.map(lambda x: x.replace(day=1))
-    except Exception as e:
-        st.error(f"Erro no Banco Central: {e}")
+    except Exception:
         return pd.DataFrame()
 
-    # Coleta Brent - Yahoo Finance
+    # 2. Coleta Brent (Ajustado para ser mais resiliente na nuvem)
     try:
-        brent_raw = yf.download('BZ=F', start='2020-01-01', progress=False)
-        # Ajuste para MultiIndex (Caso o yfinance traga colunas duplas)
+        # Pedimos um período maior (1mo) para garantir que o 'Close' mais recente venha
+        brent_raw = yf.download('BZ=F', period='1mo', interval='1d', progress=False)
+        
         if isinstance(brent_raw.columns, pd.MultiIndex):
             brent_raw.columns = brent_raw.columns.get_level_values(0)
         
-        brent_series = brent_raw['Close'].resample('MS').mean()
+        # Pegamos o último fechamento válido (não nulo)
+        ultimo_brent = brent_raw['Close'].dropna().iloc[-1]
+        
+        # Criamos a série mensal para o gráfico, mas garantimos o valor do KPI
+        brent_hist = yf.download('BZ=F', start='2020-01-01', progress=False)
+        if isinstance(brent_hist.columns, pd.MultiIndex):
+            brent_hist.columns = brent_hist.columns.get_level_values(0)
+            
+        brent_series = brent_hist['Close'].resample('MS').mean()
         brent_series.name = 'Brent'
     except Exception:
         brent_series = pd.Series(name='Brent', dtype='float64')
 
-    # Merge e Reset do Índice
+    # Merge e padronização
     df = pd.concat([df_sgs, brent_series], axis=1).reset_index()
-    
-    # FORÇAR PADRONIZAÇÃO DA COLUNA DE DATA
-    # Renomeia a primeira coluna (independente se veio como 'Date' ou 'Data') para 'Periodo'
     df.columns.values[0] = 'Periodo'
-    
-    # Data Cleaning: Preenche buracos causados por feriados (Forward Fill)
     df = df.ffill()
+    
+    # Se o valor do último mês no merge ficar vazio, forçamos o último valor real do Brent
+    if pd.isna(df.iloc[-1]['Brent']) and 'ultimo_brent' in locals():
+        df.loc[df.index[-1], 'Brent'] = ultimo_brent
+        
     return df
 
 # --- 3. PROCESSAMENTO ---
