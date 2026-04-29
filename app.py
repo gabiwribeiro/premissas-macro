@@ -35,9 +35,14 @@ def carregar_dados():
         if isinstance(brent_raw.columns, pd.MultiIndex):
             brent_raw.columns = brent_raw.columns.get_level_values(0)
         
-        ultimo_brent_real = brent_raw['Close'].dropna().iloc[-1]
-        brent_series = brent_raw['Close'].resample('MS').mean()
-        brent_series.name = 'Brent'
+        # Garantir que temos dados antes de prosseguir
+        if not brent_raw.empty:
+            ultimo_brent_real = brent_raw['Close'].dropna().iloc[-1]
+            brent_series = brent_raw['Close'].resample('MS').mean()
+            brent_series.name = 'Brent'
+        else:
+            ultimo_brent_real = 0
+            brent_series = pd.Series(name='Brent', dtype='float64')
     except Exception:
         ultimo_brent_real = 0
         brent_series = pd.Series(name='Brent', dtype='float64')
@@ -46,7 +51,7 @@ def carregar_dados():
         df = pd.concat([df_sgs, brent_series], axis=1).reset_index()
         df.columns.values[0] = 'Periodo'
         df = df.ffill().bfill()
-        if pd.isna(df.iloc[-1]['Brent']) and ultimo_brent_real > 0:
+        if 'Brent' in df.columns and pd.isna(df.iloc[-1]['Brent']) and ultimo_brent_real > 0:
             df.loc[df.index[-1], 'Brent'] = ultimo_brent_real
         return df
     return pd.DataFrame()
@@ -69,7 +74,7 @@ if not df_final.empty:
     # --- 4. GRÁFICOS ---
     col_a, col_b = st.columns(2)
     with col_a:
-        st.subheader("Custos: Brent vs Câmbio (Eixos Distintos)")
+        st.subheader("Custos: Brent vs Câmbio")
         fig_custo = make_subplots(specs=[[{"secondary_y": True}]])
         fig_custo.add_trace(go.Scatter(x=df_final['Periodo'], y=df_final['Dólar'], name="Câmbio", line=dict(color='#005291', width=3)), secondary_y=False)
         fig_custo.add_trace(go.Scatter(x=df_final['Periodo'], y=df_final['Brent'], name="Brent", line=dict(color='#008751', width=3)), secondary_y=True)
@@ -82,39 +87,36 @@ if not df_final.empty:
 
     st.divider()
 
-    # --- 5. NOVA TABELA DE VISUALIZAÇÃO ANUAL/MENSAL (CONFORME EXEMPLO) ---
+    # --- 5. TABELA DE VISUALIZAÇÃO (CORRIGIDA) ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
     
-    # Preparação dos dados para o formato horizontal
     df_tab = df_final.copy()
     df_tab['Ano'] = df_tab['Periodo'].dt.year
-    df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').str.lower()
+    df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').lower()
 
-    # 1. Médias Anuais (2023, 2024, 2025)
+    # Médias Anuais e Mensais de 2026
     df_anuais = df_tab[df_tab['Ano'].isin([2023, 2024, 2025])].groupby('Ano').mean(numeric_only=True).T
     df_anuais.columns = [str(col) for col in df_anuais.columns]
-
-    # 2. Dados Mensais de 2026 (Exemplo de projeção baseada no último dado disponível)
-    # Nota: Como o código coleta dados reais, 2026 aparecerá conforme o tempo passar. 
+    
     df_2026 = df_tab[df_tab['Ano'] == 2026].set_index('Mes_Ref').drop(columns=['Periodo', 'Ano']).T
     
-    # 3. Concatenar para gerar a visão horizontal
     tabela_final = pd.concat([df_anuais, df_2026], axis=1)
 
-    # Formatação de Estilo (Cores e Percentuais)
     def formatar_valores(val):
-        if val > 100: return f"{val:,.2f}" # Para Brent ou Dólar
-        return f"{val:.2f}%" # Para taxas
+        if pd.isna(val): return "-"
+        if abs(val) > 30: return f"{val:,.2f}" # Dólar e Brent
+        return f"{val:.2f}%" # Taxas
 
-    st.dataframe(
-        tabela_final.style.format(formatar_valores)
-        .background_gradient(cmap='Greens', axis=1, subset=pd.IndexSlice[['Brent'], :])
-        .highlight_max(axis=1, color='#e6f3ff'),
-        use_container_width=True
-    )
+    # Aplicação segura do estilo
+    styler = tabela_final.style.format(formatar_valores)
+    
+    # Só destaca o máximo se houver dados na tabela
+    if not tabela_final.empty:
+        styler = styler.highlight_max(axis=1, color='#e6f3ff')
 
-    # Rodapé com fonte
-    st.caption("Fontes: Banco Central do Brasil (SGS) e Yahoo Finance. *Valores de 2026 conforme disponibilidade de mercado.*")
+    st.dataframe(styler, use_container_width=True)
+
+    st.caption("Fontes: Banco Central do Brasil (SGS) e Yahoo Finance.")
 
 else:
     st.error("Não foi possível carregar os dados. Verifique a conexão com as APIs.")
