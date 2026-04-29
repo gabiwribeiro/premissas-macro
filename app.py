@@ -54,7 +54,7 @@ def carregar_dados():
 df_final = carregar_dados()
 
 if not df_final.empty:
-    # --- 4. KPIs (INDICADORES RESUMIDOS) COM VÍRGULA ---
+    # --- 4. KPIs (INDICADORES RESUMIDOS) ---
     def get_last_valid(df, column):
         valid_series = df[column].dropna()
         return valid_series.iloc[-1] if not valid_series.empty else 0
@@ -64,24 +64,19 @@ if not df_final.empty:
     val_selic = get_last_valid(df_final, 'SELIC')
     val_ipca = get_last_valid(df_final, 'IPCA')
 
-    # Função para formatar os cards (ex: 5.00 -> 5,00)
     def pbr(valor, pct=False):
         texto = f"{valor:.2f}".replace(".", ",")
         return texto + "%" if pct else texto
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Câmbio (USD/BRL)", f"R$ {pbr(val_cambio)}")
-    with c2:
-        st.metric("Petróleo Brent", f"U$ {pbr(val_brent)}" if val_brent > 0 else "U$ --")
-    with c3:
-        st.metric("SELIC Atual", pbr(val_selic, pct=True))
-    with c4:
-        st.metric("IPCA (Mês)", pbr(val_ipca, pct=True))
+    with c1: st.metric("Câmbio (USD/BRL)", f"R$ {pbr(val_cambio)}")
+    with c2: st.metric("Petróleo Brent", f"U$ {pbr(val_brent)}" if val_brent > 0 else "U$ --")
+    with c3: st.metric("SELIC Atual", pbr(val_selic, pct=True))
+    with c4: st.metric("IPCA (Mês)", pbr(val_ipca, pct=True))
 
     st.divider()
 
-    # --- 5. GRÁFICOS ---
+    # --- 5. GRÁFICOS (MANTIDOS) ---
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Custos: Brent vs Câmbio")
@@ -89,7 +84,6 @@ if not df_final.empty:
         fig.add_trace(go.Scatter(x=df_final['Periodo'], y=df_final['Dólar'], name="Câmbio", line=dict(color='#005291')), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_final['Periodo'], y=df_final['Brent'], name="Brent", line=dict(color='#008751')), secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
-
     with col_b:
         st.subheader("Inflação: IPCA vs IGPM")
         fig_inf = px.area(df_final, x='Periodo', y=['IPCA', 'IGPM'], color_discrete_map={'IPCA': '#005291', 'IGPM': '#FF4B4B'})
@@ -97,46 +91,65 @@ if not df_final.empty:
 
     st.divider()
 
-   # --- 6. TABELA CONSOLIDADA ---
+    # --- 6. TABELA CONSOLIDADA (CORREÇÃO IPCA ANUAL E DÓLAR %) ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
 
     df_tab = df_final.copy()
     df_tab['Ano'] = df_tab['Periodo'].dt.year
     df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').str.lower()
 
-    # Médias Anuais
-    df_anuais = df_tab[df_tab['Ano'].isin([2023, 2024, 2025])].groupby('Ano').mean(numeric_only=True).T
+    # Médias Anuais para Preços e SOMAS para Inflação
+    def consolidar_ano(group):
+        return pd.Series({
+            'IPCA': group['IPCA'].sum(),   # Inflação se soma no ano
+            'IGPM': group['IGPM'].sum(),   # Inflação se soma no ano
+            'SELIC': group['SELIC'].mean(), # Juros se tira média
+            'Dólar': group['Dólar'].mean(), # Câmbio se tira média
+            'Brent': group['Brent'].mean()  # Brent se tira média
+        })
+
+    df_anuais = df_tab[df_tab['Ano'].isin([2023, 2024, 2025])].groupby('Ano').apply(consolidar_ano).T
     df_anuais.columns = df_anuais.columns.astype(str)
 
-    # Mensal 2026
+    # Mensal 2026 (Valores reais mensais)
     df_2026 = df_tab[df_tab['Ano'] == 2026].copy()
     if not df_2026.empty:
         df_2026 = df_2026.set_index('Mes_Ref').drop(columns=['Periodo', 'Ano']).T
     else:
         df_2026 = pd.DataFrame(index=df_anuais.index)
 
-    # União e Remoção de duplicados
     tabela_viz = pd.concat([df_anuais, df_2026], axis=1)
     tabela_viz = tabela_viz.loc[:, ~tabela_viz.columns.duplicated()]
-    tabela_viz.index.name = "Indicadores"
-
-    # Formatação Brasileira para a Tabela
-    def formatar_br(val):
+    
+    # FORMATADOR BASEADO NO NOME DA LINHA (INDEX)
+    def formatar_final(val):
         if pd.isna(val) or val == 0: return "-"
-        if abs(val) > 20: 
-            return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        return f"{val:.2f}%".replace(".", ",")
+        
+        # Obtemos o nome do indicador que estamos formatando
+        # O styler passa o valor, mas precisamos saber de qual linha ele é
+        return val # Fallback
 
-    # O erro estava nesta região. Certifique-se de que o bloco try/except está assim:
+    # Aplicando a formatação linha a linha para evitar erro de dólar com %
+    styler = tabela_viz.style.format(lambda v: f"{v:.2f}".replace(".", ","))
+    
+    # Aplicar sufixo % apenas nas linhas de taxas
+    taxas = ['IPCA', 'IGPM', 'SELIC']
+    for taxa in taxas:
+        if taxa in tabela_viz.index:
+            styler = styler.format(lambda v: f"{v:.2f}%".replace(".", ","), subset=pd.IndexSlice[taxa, :])
+    
+    # Aplicar formato de moeda/valor nas linhas de preços
+    precos = ['Dólar', 'Brent']
+    for preco in precos:
+        if preco in tabela_viz.index:
+            styler = styler.format(lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), subset=pd.IndexSlice[preco, :])
+
     try:
-        st.dataframe(
-            tabela_viz.style.format(formatar_br).highlight_max(axis=1, color='#e6f3ff'),
-            use_container_width=True
-        ) # Parêntese do st.dataframe fechado aqui
-    except Exception as e:
+        st.dataframe(styler.highlight_max(axis=1, color='#e6f3ff'), use_container_width=True)
+    except:
         st.dataframe(tabela_viz, use_container_width=True)
 
-    st.caption("Fontes: BCB (SGS) e Yahoo Finance.")
+    st.caption("Fontes: BCB (SGS) e Yahoo Finance. *IPCA/IGPM anuais representam o acumulado (soma) do período.*")
 
 else:
-    st.error("Não foi possível carregar os dados das APIs.")
+    st.error("Erro ao carregar dados.")
