@@ -27,33 +27,34 @@ def carregar_dados():
 
     # Coleta Brent - Yahoo Finance (Com lógica de Fallback para Nuvem)
     try:
-        # Tentativa 1: Histórico completo
+        # Baixamos um histórico um pouco maior para garantir que o 'Close' venha
         brent_raw = yf.download('BZ=F', start='2020-01-01', progress=False)
         
         if isinstance(brent_raw.columns, pd.MultiIndex):
             brent_raw.columns = brent_raw.columns.get_level_values(0)
         
-        if not brent_raw.empty:
-            brent_series = brent_raw['Close'].resample('MS').mean()
-            brent_series.name = 'Brent'
-            
-            # Garantia do último preço disponível (Spot Price)
-            ultimo_preço_valido = brent_raw['Close'].dropna().iloc[-1]
-        else:
-            brent_series = pd.Series(name='Brent', dtype='float64')
+        # Pega o último preço real (spot) ignorando NaNs
+        # Isso garante o valor do KPI no topo
+        ultimo_brent_real = brent_raw['Close'].dropna().iloc[-1]
+        
+        # Prepara a série mensal para o gráfico
+        brent_series = brent_raw['Close'].resample('MS').mean()
+        brent_series.name = 'Brent'
     except Exception:
+        ultimo_brent_real = 0
         brent_series = pd.Series(name='Brent', dtype='float64')
 
-    # Merge Final
+    # Merge e padronização
     df = pd.concat([df_sgs, brent_series], axis=1).reset_index()
     df.columns.values[0] = 'Periodo'
     
-    # Preenchimento de lacunas (Data Wrangling)
-    df = df.ffill().bfill()
+    # Preenchimento de lacunas (Forward Fill)
+    df = df.ffill()
     
-    # Ajuste Técnico: Se o Brent do último mês falhou no merge, usamos o Spot Price
-    if 'ultimo_preço_valido' in locals() and pd.isna(df.iloc[-1]['Brent']):
-        df.loc[df.index[-1], 'Brent'] = ultimo_preço_valido
+    # FORÇA O VALOR NO KPI: Se o último registro do gráfico ainda for NaN,
+    # injetamos o último preço real capturado
+    if pd.isna(df.iloc[-1]['Brent']) and ultimo_brent_real > 0:
+        df.loc[df.index[-1], 'Brent'] = ultimo_brent_real
         
     return df
 
