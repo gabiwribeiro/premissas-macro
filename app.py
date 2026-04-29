@@ -14,7 +14,7 @@ st.set_page_config(page_title="Dashboard Macro FP&A - Vibra", layout="wide")
 st.title("📊 Monitor de Indicadores Macroeconômicos")
 st.markdown("Automated Data Pipeline | **MBA IA, Ciência de Dados e Big Data para Negócios**")
 
-# --- 2. FUNÇÃO DE COLETA OTIMIZADA ---
+# --- 2. FUNÇÃO DE COLETA ---
 @st.cache_data(ttl=3600)
 def carregar_dados():
     codigos = {'IPCA': 433, 'SELIC': 432, 'Dólar': 10813, 'IGPM': 189}
@@ -35,7 +35,6 @@ def carregar_dados():
         if isinstance(brent_raw.columns, pd.MultiIndex):
             brent_raw.columns = brent_raw.columns.get_level_values(0)
         
-        # Garantir que temos dados antes de prosseguir
         if not brent_raw.empty:
             ultimo_brent_real = brent_raw['Close'].dropna().iloc[-1]
             brent_series = brent_raw['Close'].resample('MS').mean()
@@ -57,7 +56,7 @@ def carregar_dados():
     return pd.DataFrame()
 
 # --- 3. EXECUÇÃO ---
-with st.spinner('Conectando às APIs financeiras...'):
+with st.spinner('Conectando às APIs...'):
     df_final = carregar_dados()
 
 if not df_final.empty:
@@ -87,36 +86,34 @@ if not df_final.empty:
 
     st.divider()
 
-    # --- 5. TABELA DE VISUALIZAÇÃO (CORRIGIDA) ---
+    # --- 5. TABELA CONSOLIDADA (CORREÇÃO DO ATRIBUTO) ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
     
     df_tab = df_final.copy()
     df_tab['Ano'] = df_tab['Periodo'].dt.year
+    # O AJUSTE ESTÁ AQUI: .dt.strftime().str.lower()
     df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').str.lower()
 
-    # Médias Anuais e Mensais de 2026
+    # Médias Anuais
     df_anuais = df_tab[df_tab['Ano'].isin([2023, 2024, 2025])].groupby('Ano').mean(numeric_only=True).T
     df_anuais.columns = [str(col) for col in df_anuais.columns]
     
+    # Mensal 2026
     df_2026 = df_tab[df_tab['Ano'] == 2026].set_index('Mes_Ref').drop(columns=['Periodo', 'Ano']).T
     
     tabela_final = pd.concat([df_anuais, df_2026], axis=1)
 
     def formatar_valores(val):
-        if pd.isna(val): return "-"
-        if abs(val) > 30: return f"{val:,.2f}" # Dólar e Brent
-        return f"{val:.2f}%" # Taxas
+        if pd.isna(val) or val == 0: return "-"
+        if abs(val) > 20: return f"{val:,.2f}" # Para valores como Brent e Dólar
+        return f"{val:.2f}%" # Para taxas IPCA, IGPM, SELIC
 
-    # Aplicação segura do estilo
-    styler = tabela_final.style.format(formatar_valores)
-    
-    # Só destaca o máximo se houver dados na tabela
-    if not tabela_final.empty:
-        styler = styler.highlight_max(axis=1, color='#e6f3ff')
-
-    st.dataframe(styler, use_container_width=True)
+    st.dataframe(
+        tabela_final.style.format(formatar_valores).highlight_max(axis=1, color='#e6f3ff'),
+        use_container_width=True
+    )
 
     st.caption("Fontes: Banco Central do Brasil (SGS) e Yahoo Finance.")
 
 else:
-    st.error("Não foi possível carregar os dados. Verifique a conexão com as APIs.")
+    st.error("Erro ao carregar dados.")
