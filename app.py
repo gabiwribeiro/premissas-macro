@@ -97,7 +97,7 @@ if not df_final.empty:
 
     st.divider()
 
-    # --- 6. TABELA CONSOLIDADA ---
+   # --- 6. TABELA CONSOLIDADA ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
 
     df_tab = df_final.copy()
@@ -127,7 +127,16 @@ if not df_final.empty:
             return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         return f"{val:.2f}%".replace(".", ",")
 
+    # O erro estava nesta região. Certifique-se de que o bloco try/except está assim:
     try:
         st.dataframe(
             tabela_viz.style.format(formatar_br).highlight_max(axis=1, color='#e6f3ff'),
             use_container_width=True
+        ) # Parêntese do st.dataframe fechado aqui
+    except Exception as e:
+        st.dataframe(tabela_viz, use_container_width=True)
+
+    st.caption("Fontes: BCB (SGS) e Yahoo Finance.")
+
+else:
+    st.error("Não foi possível carregar os dados das APIs.")
