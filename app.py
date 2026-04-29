@@ -54,7 +54,7 @@ def carregar_dados():
 df_final = carregar_dados()
 
 if not df_final.empty:
-    # --- KPIs ---
+    # --- 4. KPIs (INDICADORES RESUMIDOS) COM VÍRGULA ---
     def get_last_valid(df, column):
         valid_series = df[column].dropna()
         return valid_series.iloc[-1] if not valid_series.empty else 0
@@ -64,15 +64,24 @@ if not df_final.empty:
     val_selic = get_last_valid(df_final, 'SELIC')
     val_ipca = get_last_valid(df_final, 'IPCA')
 
+    # Função para formatar os cards (ex: 5.00 -> 5,00)
+    def pbr(valor, pct=False):
+        texto = f"{valor:.2f}".replace(".", ",")
+        return texto + "%" if pct else texto
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Câmbio (USD/BRL)", f"R$ {val_cambio:.2f}")
-    c2.metric("Petróleo Brent", f"U$ {val_brent:.2f}" if val_brent > 0 else "U$ --")
-    c3.metric("SELIC Atual", f"{val_selic:.2f}%")
-    c4.metric("IPCA (Mês)", f"{val_ipca:.2f}%")
+    with c1:
+        st.metric("Câmbio (USD/BRL)", f"R$ {pbr(val_cambio)}")
+    with c2:
+        st.metric("Petróleo Brent", f"U$ {pbr(val_brent)}" if val_brent > 0 else "U$ --")
+    with c3:
+        st.metric("SELIC Atual", pbr(val_selic, pct=True))
+    with c4:
+        st.metric("IPCA (Mês)", pbr(val_ipca, pct=True))
 
     st.divider()
 
-    # --- 4. GRÁFICOS ---
+    # --- 5. GRÁFICOS ---
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Custos: Brent vs Câmbio")
@@ -88,7 +97,7 @@ if not df_final.empty:
 
     st.divider()
 
-    # --- 5. TABELA CONSOLIDADA (COM FIX PARA DUPLICADOS) ---
+    # --- 6. TABELA CONSOLIDADA ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
 
     df_tab = df_final.copy()
@@ -106,25 +115,19 @@ if not df_final.empty:
     else:
         df_2026 = pd.DataFrame(index=df_anuais.index)
 
-    # União e REMOÇÃO DE COLUNAS DUPLICADAS
+    # União e Remoção de duplicados
     tabela_viz = pd.concat([df_anuais, df_2026], axis=1)
-    tabela_viz = tabela_viz.loc[:, ~tabela_viz.columns.duplicated()] # <-- SOLUÇÃO DO ERRO
-    
+    tabela_viz = tabela_viz.loc[:, ~tabela_viz.columns.duplicated()]
     tabela_viz.index.name = "Indicadores"
 
-    def formatar_valores(val):
+    # Formatação Brasileira para a Tabela
+    def formatar_br(val):
         if pd.isna(val) or val == 0: return "-"
-        if abs(val) > 20: return f"{val:,.2f}" # Dólar e Brent
-        return f"{val:.2f}%"
+        if abs(val) > 20: 
+            return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"{val:.2f}%".replace(".", ",")
 
     try:
-        styler = tabela_viz.style.format(formatar_valores).highlight_max(axis=1, color='#e6f3ff')
-        st.dataframe(styler, use_container_width=True)
-    except:
-        # Fallback caso o styler ainda apresente problemas com o índice
-        st.dataframe(tabela_viz, use_container_width=True)
-
-    st.caption("Fontes: BCB (SGS) e Yahoo Finance.")
-
-else:
-    st.error("Erro ao carregar dados das APIs.")
+        st.dataframe(
+            tabela_viz.style.format(formatar_br).highlight_max(axis=1, color='#e6f3ff'),
+            use_container_width=True
