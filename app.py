@@ -91,65 +91,61 @@ if not df_final.empty:
 
     st.divider()
 
-    # --- 6. TABELA CONSOLIDADA (CORREÇÃO IPCA ANUAL E DÓLAR %) ---
+   # --- 6. TABELA CONSOLIDADA (COM CÁLCULO DE INFLAÇÃO ANUALIZADA) ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
 
     df_tab = df_final.copy()
     df_tab['Ano'] = df_tab['Periodo'].dt.year
     df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').str.lower()
 
-    # Médias Anuais para Preços e SOMAS para Inflação
+    # Função para consolidar o ano corretamente por tipo de indicador
     def consolidar_ano(group):
+        # Para Inflação (IPCA/IGPM): Cálculo de Juros Compostos (Acumulado)
+        # (1 + r1) * (1 + r2) ... - 1
+        def acumular_taxa(series):
+            return ((series / 100 + 1).prod() - 1) * 100
+
         return pd.Series({
-            'IPCA': group['IPCA'].sum(),   # Inflação se soma no ano
-            'IGPM': group['IGPM'].sum(),   # Inflação se soma no ano
-            'SELIC': group['SELIC'].mean(), # Juros se tira média
-            'Dólar': group['Dólar'].mean(), # Câmbio se tira média
-            'Brent': group['Brent'].mean()  # Brent se tira média
+            'IPCA': acumular_taxa(group['IPCA']),
+            'IGPM': acumular_taxa(group['IGPM']),
+            'SELIC': group['SELIC'].mean(), # Juros: Média do período
+            'Dólar': group['Dólar'].mean(), # Câmbio: Média do período
+            'Brent': group['Brent'].mean()  # Brent: Média do período
         })
 
+    # Aplica a consolidação para os anos fechados
     df_anuais = df_tab[df_tab['Ano'].isin([2023, 2024, 2025])].groupby('Ano').apply(consolidar_ano).T
     df_anuais.columns = df_anuais.columns.astype(str)
 
-    # Mensal 2026 (Valores reais mensais)
+    # Dados Mensais de 2026 (Valores reais mensais sem acumular)
     df_2026 = df_tab[df_tab['Ano'] == 2026].copy()
     if not df_2026.empty:
         df_2026 = df_2026.set_index('Mes_Ref').drop(columns=['Periodo', 'Ano']).T
     else:
         df_2026 = pd.DataFrame(index=df_anuais.index)
 
+    # União das colunas
     tabela_viz = pd.concat([df_anuais, df_2026], axis=1)
     tabela_viz = tabela_viz.loc[:, ~tabela_viz.columns.duplicated()]
-    
-    # FORMATADOR BASEADO NO NOME DA LINHA (INDEX)
-    def formatar_final(val):
-        if pd.isna(val) or val == 0: return "-"
-        
-        # Obtemos o nome do indicador que estamos formatando
-        # O styler passa o valor, mas precisamos saber de qual linha ele é
-        return val # Fallback
+    tabela_viz.index.name = "Indicadores"
 
-    # Aplicando a formatação linha a linha para evitar erro de dólar com %
-    styler = tabela_viz.style.format(lambda v: f"{v:.2f}".replace(".", ","))
-    
-    # Aplicar sufixo % apenas nas linhas de taxas
+    # --- Lógica de Formatação Visual ---
+    styler = tabela_viz.style
+
+    # 1. Formatação para Taxas (IPCA, IGPM, SELIC) -> Usar % e vírgula
     taxas = ['IPCA', 'IGPM', 'SELIC']
-    for taxa in taxas:
-        if taxa in tabela_viz.index:
-            styler = styler.format(lambda v: f"{v:.2f}%".replace(".", ","), subset=pd.IndexSlice[taxa, :])
-    
-    # Aplicar formato de moeda/valor nas linhas de preços
-    precos = ['Dólar', 'Brent']
-    for preco in precos:
-        if preco in tabela_viz.index:
-            styler = styler.format(lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), subset=pd.IndexSlice[preco, :])
+    for t in taxas:
+        if t in tabela_viz.index:
+            styler = styler.format(lambda v: f"{v:.2f}%".replace(".", ","), subset=pd.IndexSlice[t, :])
 
+    # 2. Formatação para Preços (Dólar, Brent) -> Sem % e com vírgula
+    precos = ['Dólar', 'Brent']
+    for p in precos:
+        if p in tabela_viz.index:
+            styler = styler.format(lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), subset=pd.IndexSlice[p, :])
+
+    # Exibição Final
     try:
         st.dataframe(styler.highlight_max(axis=1, color='#e6f3ff'), use_container_width=True)
-    except:
+    except Exception as e:
         st.dataframe(tabela_viz, use_container_width=True)
-
-    st.caption("Fontes: BCB (SGS) e Yahoo Finance. *IPCA/IGPM anuais representam o acumulado (soma) do período.*")
-
-else:
-    st.error("Erro ao carregar dados.")
