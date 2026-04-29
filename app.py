@@ -79,10 +79,37 @@ if not df_final.empty:
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Custos: Brent vs Câmbio")
-        fig_custo = px.line(df_final, x='Periodo', y=['Brent', 'Dólar'],
-                            labels={'value': 'Valor', 'Periodo': 'Período'},
-                            color_discrete_map={'Brent': '#008751', 'Dólar': '#005291'})
-        st.plotly_chart(fig_custo, use_container_width=True)
+        fig_custo = from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+
+# --- Gráfico de Custos com Dois Eixos ---
+st.subheader("Custos: Brent vs Câmbio (Eixos Distintos)")
+
+# Criar subplots com um eixo secundário
+fig_custo = make_subplots(specs=[[{"secondary_y": True}]])
+
+# Adicionar a linha do Brent (Eixo Direito)
+fig_custo.add_trace(
+    go.Scatter(x=df_final['Periodo'], y=df_final['Brent'], name="Brent (US$/bbl)",
+               line=dict(color='#008751', width=3)),
+    secondary_y=True,
+)
+
+# Adicionar a linha do Dólar (Eixo Esquerdo)
+fig_custo.add_trace(
+    go.Scatter(x=df_final['Periodo'], y=df_final['Dólar'], name="Câmbio (R$/US$)",
+               line=dict(color='#005291', width=3)),
+    secondary_y=False,
+)
+
+# Configurar títulos dos eixos
+fig_custo.update_xaxes(title_text="Período")
+fig_custo.update_yaxes(title_text="<b>Câmbio</b> (R$/US$)", secondary_y=False)
+fig_custo.update_yaxes(title_text="<b>Brent</b> (US$/bbl)", secondary_y=True)
+
+fig_custo.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+
+st.plotly_chart(fig_custo, use_container_width=True)
 
     with col_b:
         st.subheader("Inflação: IPCA vs IGPM")
