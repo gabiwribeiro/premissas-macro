@@ -1,11 +1,14 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from bcb import sgs
 import yfinance as yf
 from datetime import datetime, timedelta
+import time
 
-# 1. CONFIGURAÇÃO DA PÁGINA
+# --- 1. CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Dashboard Macro FP&A - Vibra", layout="wide")
 
 st.title("📊 Monitor de Indicadores Macroeconômicos")
@@ -14,28 +17,25 @@ st.markdown("Automated Data Pipeline | **MBA IA, Ciência de Dados e Big Data pa
 # --- 2. FUNÇÃO DE COLETA OTIMIZADA ---
 @st.cache_data(ttl=3600)
 def carregar_dados():
-    # 1. Coleta SGS - Banco Central (Com Lógica de Re-tentativa e Timeout)
+    # Coleta SGS - Banco Central
     codigos = {'IPCA': 433, 'SELIC': 432, 'Dólar': 10813, 'IGPM': 189}
     df_sgs = pd.DataFrame()
     
-    # Tentamos até 3 vezes antes de desistir
     for tentativa in range(3):
         try:
-            # Puxamos os dados - O banco central às vezes demora a responder na nuvem
             df_sgs = sgs.get(codigos, start='2020-01-01')
             if not df_sgs.empty:
                 df_sgs.index = df_sgs.index.map(lambda x: x.replace(day=1))
-                break # Sucesso! Sai do loop de tentativas
+                break 
         except Exception as e:
-            if tentativa < 2: # Se não for a última tentativa, espera 2 segundos e tenta de novo
-                import time
+            if tentativa < 2:
                 time.sleep(2)
                 continue
             else:
-                st.error(f"O Banco Central está instável no momento (Timeout). Tentaremos novamente em breve.")
+                st.error(f"O Banco Central está instável no momento.")
                 return pd.DataFrame()
 
-    # 2. Coleta Brent (Yahoo Finance) - Geralmente mais estável
+    # Coleta Brent (Yahoo Finance)
     try:
         brent_raw = yf.download('BZ=F', start='2020-01-01', progress=False)
         if isinstance(brent_raw.columns, pd.MultiIndex):
@@ -48,7 +48,7 @@ def carregar_dados():
         ultimo_brent_real = 0
         brent_series = pd.Series(name='Brent', dtype='float64')
 
-    # Merge e padronização (Só faz se o SGS trouxe dados)
+    # Merge e padronização
     if not df_sgs.empty:
         df = pd.concat([df_sgs, brent_series], axis=1).reset_index()
         df.columns.values[0] = 'Periodo'
@@ -65,7 +65,7 @@ with st.spinner('Conectando às APIs financeiras...'):
     df_final = carregar_dados()
 
 if not df_final.empty:
-    # KPIs
+    # --- KPIs ---
     ultimos = df_final.iloc[-1]
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Câmbio (USD/BRL)", f"R$ {ultimos['Dólar']:.2f}")
@@ -75,51 +75,47 @@ if not df_final.empty:
 
     st.divider()
 
-    # Gráficos
+    # --- GRÁFICOS ---
     col_a, col_b = st.columns(2)
+    
     with col_a:
-        st.subheader("Custos: Brent vs Câmbio")
-        fig_custo = from plotly.subplots import make_subplots
-import plotly.graph_objects as go
+        st.subheader("Custos: Brent vs Câmbio (Eixos Distintos)")
+        
+        # Criar subplots com um eixo secundário
+        fig_custo = make_subplots(specs=[[{"secondary_y": True}]])
 
-# --- Gráfico de Custos com Dois Eixos ---
-st.subheader("Custos: Brent vs Câmbio (Eixos Distintos)")
+        # Adicionar a linha do Dólar (Eixo Esquerdo)
+        fig_custo.add_trace(
+            go.Scatter(x=df_final['Periodo'], y=df_final['Dólar'], name="Câmbio (R$/US$)",
+                       line=dict(color='#005291', width=3)),
+            secondary_y=False,
+        )
 
-# Criar subplots com um eixo secundário
-fig_custo = make_subplots(specs=[[{"secondary_y": True}]])
+        # Adicionar a linha do Brent (Eixo Direito)
+        fig_custo.add_trace(
+            go.Scatter(x=df_final['Periodo'], y=df_final['Brent'], name="Brent (US$/bbl)",
+                       line=dict(color='#008751', width=3)),
+            secondary_y=True,
+        )
 
-# Adicionar a linha do Brent (Eixo Direito)
-fig_custo.add_trace(
-    go.Scatter(x=df_final['Periodo'], y=df_final['Brent'], name="Brent (US$/bbl)",
-               line=dict(color='#008751', width=3)),
-    secondary_y=True,
-)
+        # Configurar títulos e legendas
+        fig_custo.update_xaxes(title_text="Período")
+        fig_custo.update_yaxes(title_text="<b>Câmbio</b> (R$/US$)", secondary_y=False)
+        fig_custo.update_yaxes(title_text="<b>Brent</b> (US$/bbl)", secondary_y=True)
+        fig_custo.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 
-# Adicionar a linha do Dólar (Eixo Esquerdo)
-fig_custo.add_trace(
-    go.Scatter(x=df_final['Periodo'], y=df_final['Dólar'], name="Câmbio (R$/US$)",
-               line=dict(color='#005291', width=3)),
-    secondary_y=False,
-)
-
-# Configurar títulos dos eixos
-fig_custo.update_xaxes(title_text="Período")
-fig_custo.update_yaxes(title_text="<b>Câmbio</b> (R$/US$)", secondary_y=False)
-fig_custo.update_yaxes(title_text="<b>Brent</b> (US$/bbl)", secondary_y=True)
-
-fig_custo.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-
-st.plotly_chart(fig_custo, use_container_width=True)
+        st.plotly_chart(fig_custo, use_container_width=True)
 
     with col_b:
         st.subheader("Inflação: IPCA vs IGPM")
         fig_inf = px.area(df_final, x='Periodo', y=['IPCA', 'IGPM'],
-                          labels={'value': 'Variação %', 'Periodo': 'Período'})
-        fig_inf.update_layout(barmode='overlay')
+                          labels={'value': 'Variação %', 'Periodo': 'Período'},
+                          color_discrete_map={'IPCA': '#005291', 'IGPM': '#FF4B4B'})
+        fig_inf.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_inf, use_container_width=True)
 
-    # Tabela
-    with st.expander("Dados Consolidados"):
+    # --- TABELA ---
+    with st.expander("Visualizar Dados Brutos"):
         st.dataframe(df_final.sort_values('Periodo', ascending=False), use_container_width=True)
 else:
     st.error("Não foi possível carregar os dados. Verifique a conexão com as APIs.")
