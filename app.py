@@ -91,25 +91,27 @@ if not df_final.empty:
 
     st.divider()
 
-    # --- 6. TABELA CONSOLIDADA (CÁLCULO ANUALIZADO CORRIGIDO) ---
+    # --- 6. TABELA CONSOLIDADA (CORREÇÃO DOS VALORES ANUAIS) ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
 
     df_tab = df_final.copy()
     df_tab['Ano'] = df_tab['Periodo'].dt.year
     df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').str.lower()
 
-    def calcular_anuais(df):
+    def calcular_anuais_correto(df):
         anos = [2023, 2024, 2025]
         resultados = {}
         
         for ano in anos:
-            df_ano = df[df['Ano'] == ano]
+            # Filtra APENAS os meses daquele ano específico
+            df_ano = df[df['Ano'] == ano].copy()
+            
             if not df_ano.empty:
-                # IPCA e IGPM: Composição Geométrica (1+r1)*(1+r2)... - 1
+                # IPCA e IGPM: Acumulação Geométrica correta (1+r/100)
                 ipca_acum = ((df_ano['IPCA'] / 100 + 1).prod() - 1) * 100
                 igpm_acum = ((df_ano['IGPM'] / 100 + 1).prod() - 1) * 100
                 
-                # Outros: Média Simples
+                # SELIC, Dólar e Brent: Média do ano
                 resultados[str(ano)] = {
                     'IPCA': ipca_acum,
                     'IGPM': igpm_acum,
@@ -119,7 +121,7 @@ if not df_final.empty:
                 }
         return pd.DataFrame(resultados)
 
-    df_anuais = calcular_anuais(df_tab)
+    df_anuais = calcular_anuais_correto(df_tab)
 
     # Dados Mensais de 2026
     df_2026 = df_tab[df_tab['Ano'] == 2026].copy()
@@ -132,15 +134,15 @@ if not df_final.empty:
     tabela_viz = tabela_viz.loc[:, ~tabela_viz.columns.duplicated()]
     tabela_viz.index.name = "Indicadores"
 
-    # --- Lógica de Formatação Visual (Correção Definitiva Dólar) ---
+    # --- Lógica de Formatação Brasileira ---
     styler = tabela_viz.style
 
-    # Aplicar formato de porcentagem apenas nas linhas de taxas
+    # Formatar Taxas (IPCA, IGPM, SELIC) com %
     for ind in ['IPCA', 'IGPM', 'SELIC']:
         if ind in tabela_viz.index:
             styler = styler.format(lambda v: f"{v:.2f}%".replace(".", ","), subset=pd.IndexSlice[ind, :])
 
-    # Aplicar formato de moeda/valor apenas nas linhas de preços
+    # Formatar Moedas/Preços (Dólar, Brent) sem %
     for ind in ['Dólar', 'Brent']:
         if ind in tabela_viz.index:
             styler = styler.format(lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), subset=pd.IndexSlice[ind, :])
@@ -150,4 +152,7 @@ if not df_final.empty:
     except:
         st.dataframe(tabela_viz, use_container_width=True)
 
-    st.caption("Fontes: BCB (SGS) e Yahoo Finance. *IPCA e IGP-M anuais calculados via acumulação geométrica mensal.*")
+    st.caption("Fontes: BCB (SGS) e Yahoo Finance. *Valores de 2023-2025: IPCA/IGP-M acumulados; demais indicadores média anual.*")
+
+else:
+    st.error("Erro ao carregar dados.")
