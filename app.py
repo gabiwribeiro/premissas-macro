@@ -27,7 +27,7 @@ def carregar_dados():
                 df_sgs.index = df_sgs.index.map(lambda x: x.replace(day=1))
                 break 
         except Exception:
-            time.sleep(2)
+            time.sleep(1)
             continue
 
     try:
@@ -44,8 +44,9 @@ def carregar_dados():
         brent_series = pd.Series(name='Brent', dtype='float64')
 
     if not df_sgs.empty:
-        df = pd.concat([df_sgs, brent_series], axis=1).reset_index()
-        df.columns.values[0] = 'Periodo'
+        df = pd.concat([df_sgs, brent_series], axis=1)
+        df = df[~df.index.duplicated(keep='first')]
+        df = df.reset_index().rename(columns={'index': 'Periodo', 'Date': 'Periodo'})
         df = df.ffill().bfill()
         return df
     return pd.DataFrame()
@@ -54,7 +55,7 @@ def carregar_dados():
 df_final = carregar_dados()
 
 if not df_final.empty:
-    # --- 4. KPIs (INDICADORES RESUMIDOS) ---
+    # --- 4. KPIs ---
     def get_last_valid(df, column):
         valid_series = df[column].dropna()
         return valid_series.iloc[-1] if not valid_series.empty else 0
@@ -76,7 +77,7 @@ if not df_final.empty:
 
     st.divider()
 
-    # --- 5. GRÁFICOS (MANTIDOS) ---
+    # --- 5. GRÁFICOS ---
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Custos: Brent vs Câmbio")
@@ -91,78 +92,68 @@ if not df_final.empty:
 
     st.divider()
 
-   # --- 6. TABELA CONSOLIDADA (COM CÁLCULO DE INFLAÇÃO ANUALIZADA) ---
+    # --- 6. TABELA CONSOLIDADA (CÁLCULO RIGOROSO) ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
 
     df_tab = df_final.copy()
     df_tab['Ano'] = df_tab['Periodo'].dt.year
     df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').str.lower()
 
-    # Função para consolidar o ano corretamente por tipo de indicador
-    def consolidar_ano(group):
-        # Para Inflação (IPCA/IGPM): Cálculo de Juros Compostos (Acumulado)
-        # (1 + r1) * (1 + r2) ... - 1
-        def acumular_taxa(series):
-            return ((series / 100 + 1).prod() - 1) * 100
+    def calcular_anuais_v2(df):
+        anos = [2023, 2024, 2025]
+        resultados = {}
+        for ano in anos:
+            df_ano = df[df['Ano'] == ano].copy()
+            if not df_ano.empty:
+                # IPCA e IGPM: Multiplicação geométrica (1 + r1/100) * (1 + r2/100)...
+                # Usamos .prod() mas garantimos que não há NaNs
+                ipca_acum = ((df_ano['IPCA'].fillna(0) / 100 + 1).prod() - 1) * 100
+                igpm_acum = ((df_ano['IGPM'].fillna(0) / 100 + 1).prod() - 1) * 100
+                
+                resultados[str(ano)] = {
+                    'IPCA': ipca_acum,
+                    'IGPM': igpm_acum,
+                    'SELIC': df_ano['SELIC'].iloc[-1], # Última do ano
+                    'Dólar': df_ano['Dólar'].mean(),
+                    'Brent': df_ano['Brent'].mean()
+                }
+        return pd.DataFrame(resultados)
 
-        return pd.Series({
-            'IPCA': acumular_taxa(group['IPCA']),
-            'IGPM': acumular_taxa(group['IGPM']),
-            'SELIC': group['SELIC'].mean(), # Juros: Média do período
-            'Dólar': group['Dólar'].mean(), # Câmbio: Média do período
-            'Brent': group['Brent'].mean()  # Brent: Média do período
-        })
+    df_anuais = calcular_anuais_v2(df_tab)
+    df_2026 = df_tab[df_tab['Ano'] == 2026].set_index('Mes_Ref').drop(columns=['Periodo', 'Ano']).T
 
-    # Aplica a consolidação para os anos fechados
-    df_anuais = df_tab[df_tab['Ano'].isin([2023, 2024, 2025])].groupby('Ano').apply(consolidar_ano).T
-    df_anuais.columns = df_anuais.columns.astype(str)
-
-    # Dados Mensais de 2026 (Valores reais mensais sem acumular)
-    df_2026 = df_tab[df_tab['Ano'] == 2026].copy()
-    if not df_2026.empty:
-        df_2026 = df_2026.set_index('Mes_Ref').drop(columns=['Periodo', 'Ano']).T
-    else:
-        df_2026 = pd.DataFrame(index=df_anuais.index)
-
-    # União das colunas
     tabela_viz = pd.concat([df_anuais, df_2026], axis=1)
     tabela_viz = tabela_viz.loc[:, ~tabela_viz.columns.duplicated()]
-    tabela_viz.index.name = "Indicadores"
 
-    # --- Lógica de Formatação Visual ---
+    # Formatação Visual
+    def formatar_br(val, ind):
+        if pd.isna(val) or val == 0: return "-"
+        if ind in ['IPCA', 'IGPM', 'SELIC']:
+            return f"{val:.2f}%".replace(".", ",")
+        return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
     styler = tabela_viz.style
+    for idx in tabela_viz.index:
+        styler = styler.format(lambda v, i=idx: formatar_br(v, i), subset=pd.IndexSlice[idx, :])
 
-    # 1. Formatação para Taxas (IPCA, IGPM, SELIC) -> Usar % e vírgula
-    taxas = ['IPCA', 'IGPM', 'SELIC']
-    for t in taxas:
-        if t in tabela_viz.index:
-            styler = styler.format(lambda v: f"{v:.2f}%".replace(".", ","), subset=pd.IndexSlice[t, :])
+    st.dataframe(styler.highlight_max(axis=1, color='#e6f3ff'), use_container_width=True)
 
-    # 2. Formatação para Preços (Dólar, Brent) -> Sem % e com vírgula
-    precos = ['Dólar', 'Brent']
-    for p in precos:
-        if p in tabela_viz.index:
-            styler = styler.format(lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), subset=pd.IndexSlice[p, :])
-
-    # Exibição Final
-    try:
-        st.dataframe(styler.highlight_max(axis=1, color='#e6f3ff'), use_container_width=True)
-    except Exception as e:
-        st.dataframe(tabela_viz, use_container_width=True)
-    # --- 7. EXPORTAÇÃO DE DADOS ---
+    # --- 7. BOTÃO DE DOWNLOAD ---
     st.divider()
     st.subheader("📥 Exportar Dados")
     
-    # Preparamos o CSV para download (Padrão Excel Brasil: separador ; e vírgula decimal)
     @st.cache_data
     def converter_csv(df):
         return df.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig')
 
     csv_data = converter_csv(df_final)
-
     st.download_button(
         label="Download Dados Completos (CSV)",
         data=csv_data,
-        file_name=f'indicadores_macro_{datetime.now().strftime("%Y%m%d")}.csv',
+        file_name=f'indicadores_macro_vibra_{datetime.now().strftime("%Y%m%d")}.csv',
         mime='text/csv',
     )
+    st.caption("Fontes: BCB e Yahoo Finance. Valores anuais: Inflação (acumulada), SELIC (fecho), Outros (média).")
+
+else:
+    st.error("Dados não encontrados. Verifique a ligação às APIs.")
