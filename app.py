@@ -92,7 +92,7 @@ if not df_final.empty:
     
     df_tab = df_final.copy()
     df_tab['Ano'] = df_tab['Periodo'].dt.year
-    df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').lower()
+    df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').str.lower()
 
     # Médias Anuais e Mensais de 2026
     df_anuais = df_tab[df_tab['Ano'].isin([2023, 2024, 2025])].groupby('Ano').mean(numeric_only=True).T
