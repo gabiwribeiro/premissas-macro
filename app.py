@@ -54,7 +54,7 @@ def carregar_dados():
 df_final = carregar_dados()
 
 if not df_final.empty:
-    # --- 4. KPIs (INDICADORES RESUMIDOS) ---
+    # --- 4. KPIs ---
     def get_last_valid(df, column):
         valid_series = df[column].dropna()
         return valid_series.iloc[-1] if not valid_series.empty else 0
@@ -76,7 +76,7 @@ if not df_final.empty:
 
     st.divider()
 
-    # --- 5. GRÁFICOS (MANTIDOS) ---
+    # --- 5. GRÁFICOS ---
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Custos: Brent vs Câmbio")
@@ -91,61 +91,63 @@ if not df_final.empty:
 
     st.divider()
 
-   # --- 6. TABELA CONSOLIDADA (COM CÁLCULO DE INFLAÇÃO ANUALIZADA) ---
+    # --- 6. TABELA CONSOLIDADA (CÁLCULO ANUALIZADO CORRIGIDO) ---
     st.subheader("📊 Premissas e Indicadores (Consolidado)")
 
     df_tab = df_final.copy()
     df_tab['Ano'] = df_tab['Periodo'].dt.year
     df_tab['Mes_Ref'] = df_tab['Periodo'].dt.strftime('%b/%y').str.lower()
 
-    # Função para consolidar o ano corretamente por tipo de indicador
-    def consolidar_ano(group):
-        # Para Inflação (IPCA/IGPM): Cálculo de Juros Compostos (Acumulado)
-        # (1 + r1) * (1 + r2) ... - 1
-        def acumular_taxa(series):
-            return ((series / 100 + 1).prod() - 1) * 100
+    def calcular_anuais(df):
+        anos = [2023, 2024, 2025]
+        resultados = {}
+        
+        for ano in anos:
+            df_ano = df[df['Ano'] == ano]
+            if not df_ano.empty:
+                # IPCA e IGPM: Composição Geométrica (1+r1)*(1+r2)... - 1
+                ipca_acum = ((df_ano['IPCA'] / 100 + 1).prod() - 1) * 100
+                igpm_acum = ((df_ano['IGPM'] / 100 + 1).prod() - 1) * 100
+                
+                # Outros: Média Simples
+                resultados[str(ano)] = {
+                    'IPCA': ipca_acum,
+                    'IGPM': igpm_acum,
+                    'SELIC': df_ano['SELIC'].mean(),
+                    'Dólar': df_ano['Dólar'].mean(),
+                    'Brent': df_ano['Brent'].mean()
+                }
+        return pd.DataFrame(resultados)
 
-        return pd.Series({
-            'IPCA': acumular_taxa(group['IPCA']),
-            'IGPM': acumular_taxa(group['IGPM']),
-            'SELIC': group['SELIC'].mean(), # Juros: Média do período
-            'Dólar': group['Dólar'].mean(), # Câmbio: Média do período
-            'Brent': group['Brent'].mean()  # Brent: Média do período
-        })
+    df_anuais = calcular_anuais(df_tab)
 
-    # Aplica a consolidação para os anos fechados
-    df_anuais = df_tab[df_tab['Ano'].isin([2023, 2024, 2025])].groupby('Ano').apply(consolidar_ano).T
-    df_anuais.columns = df_anuais.columns.astype(str)
-
-    # Dados Mensais de 2026 (Valores reais mensais sem acumular)
+    # Dados Mensais de 2026
     df_2026 = df_tab[df_tab['Ano'] == 2026].copy()
     if not df_2026.empty:
         df_2026 = df_2026.set_index('Mes_Ref').drop(columns=['Periodo', 'Ano']).T
     else:
         df_2026 = pd.DataFrame(index=df_anuais.index)
 
-    # União das colunas
     tabela_viz = pd.concat([df_anuais, df_2026], axis=1)
     tabela_viz = tabela_viz.loc[:, ~tabela_viz.columns.duplicated()]
     tabela_viz.index.name = "Indicadores"
 
-    # --- Lógica de Formatação Visual ---
+    # --- Lógica de Formatação Visual (Correção Definitiva Dólar) ---
     styler = tabela_viz.style
 
-    # 1. Formatação para Taxas (IPCA, IGPM, SELIC) -> Usar % e vírgula
-    taxas = ['IPCA', 'IGPM', 'SELIC']
-    for t in taxas:
-        if t in tabela_viz.index:
-            styler = styler.format(lambda v: f"{v:.2f}%".replace(".", ","), subset=pd.IndexSlice[t, :])
+    # Aplicar formato de porcentagem apenas nas linhas de taxas
+    for ind in ['IPCA', 'IGPM', 'SELIC']:
+        if ind in tabela_viz.index:
+            styler = styler.format(lambda v: f"{v:.2f}%".replace(".", ","), subset=pd.IndexSlice[ind, :])
 
-    # 2. Formatação para Preços (Dólar, Brent) -> Sem % e com vírgula
-    precos = ['Dólar', 'Brent']
-    for p in precos:
-        if p in tabela_viz.index:
-            styler = styler.format(lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), subset=pd.IndexSlice[p, :])
+    # Aplicar formato de moeda/valor apenas nas linhas de preços
+    for ind in ['Dólar', 'Brent']:
+        if ind in tabela_viz.index:
+            styler = styler.format(lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), subset=pd.IndexSlice[ind, :])
 
-    # Exibição Final
     try:
         st.dataframe(styler.highlight_max(axis=1, color='#e6f3ff'), use_container_width=True)
-    except Exception as e:
+    except:
         st.dataframe(tabela_viz, use_container_width=True)
+
+    st.caption("Fontes: BCB (SGS) e Yahoo Finance. *IPCA e IGP-M anuais calculados via acumulação geométrica mensal.*")
