@@ -17,25 +17,32 @@ st.markdown("Automated Data Pipeline | **MBA IA, Ciência de Dados e Big Data pa
 # --- 2. FUNÇÃO DE COLETA ---
 @st.cache_data(ttl=3600)
 def carregar_dados():
+    # Dólar (10813), SELIC (432), IPCA (433), IGPM (189)
     codigos = {'IPCA': 433, 'SELIC': 432, 'Dólar': 10813, 'IGPM': 189}
     df_sgs = pd.DataFrame()
     
+    # Tentativas de conexão com o Banco Central
     for tentativa in range(3):
         try:
             df_sgs = sgs.get(codigos, start='2020-01-01')
             if not df_sgs.empty:
+                # Padronização temporal: primeiro dia do mês
                 df_sgs.index = df_sgs.index.map(lambda x: x.replace(day=1))
                 break 
         except Exception:
             time.sleep(1)
             continue
 
+    # Coleta do Brent via Yahoo Finance
     try:
         brent_raw = yf.download('BZ=F', start='2020-01-01', progress=False)
-        if isinstance(brent_raw.columns, pd.MultiIndex):
-            brent_raw.columns = brent_raw.columns.get_level_values(0)
         
-        if not brent_raw.empty:
+        # Tratamento de MultiIndex (Flattening)
+        if isinstance(brent_raw.columns, pd.MultiIndex):
+            brent_raw.columns = brent_raw.columns.droplevel(1)
+        
+        if not brent_raw.empty and 'Close' in brent_raw.columns:
+            # Reamostragem para média mensal
             brent_series = brent_raw['Close'].resample('MS').mean()
             brent_series.name = 'Brent'
         else:
@@ -43,10 +50,12 @@ def carregar_dados():
     except Exception:
         brent_series = pd.Series(name='Brent', dtype='float64')
 
+    # Consolidação (Join) e Data Cleaning
     if not df_sgs.empty:
         df = pd.concat([df_sgs, brent_series], axis=1)
         df = df[~df.index.duplicated(keep='first')]
         df = df.reset_index().rename(columns={'index': 'Periodo', 'Date': 'Periodo'})
+        # Tratamento de Nulos (Forward Fill)
         df = df.ffill().bfill()
         return df
     return pd.DataFrame()
@@ -105,15 +114,14 @@ if not df_final.empty:
         for ano in anos:
             df_ano = df[df['Ano'] == ano].copy()
             if not df_ano.empty:
-                # IPCA e IGPM: Multiplicação geométrica (1 + r1/100) * (1 + r2/100)...
-                # Usamos .prod() mas garantimos que não há NaNs
+                # IPCA e IGPM: Multiplicação geométrica acumulada
                 ipca_acum = ((df_ano['IPCA'].fillna(0) / 100 + 1).prod() - 1) * 100
                 igpm_acum = ((df_ano['IGPM'].fillna(0) / 100 + 1).prod() - 1) * 100
                 
                 resultados[str(ano)] = {
                     'IPCA': ipca_acum,
                     'IGPM': igpm_acum,
-                    'SELIC': df_ano['SELIC'].iloc[-1], # Última do ano
+                    'SELIC': df_ano['SELIC'].iloc[-1], 
                     'Dólar': df_ano['Dólar'].mean(),
                     'Brent': df_ano['Brent'].mean()
                 }
@@ -125,7 +133,7 @@ if not df_final.empty:
     tabela_viz = pd.concat([df_anuais, df_2026], axis=1)
     tabela_viz = tabela_viz.loc[:, ~tabela_viz.columns.duplicated()]
 
-    # Formatação Visual
+    # Formatação Visual para Excel/Dashboard
     def formatar_br(val, ind):
         if pd.isna(val) or val == 0: return "-"
         if ind in ['IPCA', 'IGPM', 'SELIC']:
